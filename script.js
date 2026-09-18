@@ -30,6 +30,11 @@ let boxStart = null;
 let boxEnd = null;
 let activeDrawing = null;
 let draggingDrawing = null;
+let isExporting = false;
+
+const EXPORT_WIDTH = 1280;
+const EXPORT_HEIGHT = 720;
+const EXPORT_FPS = 24;
 
 function createScene(name = 'New idea') {
   return {
@@ -187,12 +192,12 @@ function hitDrawing(point) {
   return null;
 }
 
-function drawFigure(ctx, figure, time, compact = false) {
+function drawFigure(ctx, figure, time, compact = false, forceMotion = false) {
   const s = figure.scale * (compact ? .28 : 1);
   const x = compact ? figure.x * .19 : figure.x;
   const y = compact ? figure.y * .22 : figure.y;
   const isActivelyDragged = !compact && dragging?.id === figure.id;
-  const isPlaybackMovement = !compact && isPlaying && Math.hypot(figure.vx || 0, figure.vy || 0) > .08;
+  const isPlaybackMovement = !compact && (isPlaying || forceMotion) && Math.hypot(figure.vx || 0, figure.vy || 0) > .08;
   const hasMotionPhysics = isActivelyDragged || isPlaybackMovement;
   const motion = hasMotionPhysics ? Math.min(1, Math.hypot(figure.vx || 0, figure.vy || 0) / 12) : 0;
   const sway = hasMotionPhysics ? Math.sin(time / 160 + figure.swing) * (.05 + motion * .16) : 0;
@@ -384,7 +389,8 @@ function updateSceneInfo() {
   const scene = currentScene();
   const hasScene = Boolean(board && scene);
   const sceneControlIds = ['add-figure', 'duplicate-figure', 'delete-selected', 'record-button', 'play-button', 'select-tool', 'pencil-tool', 'eraser-tool', 'add-scene', 'delete-scene', 'color-picker', 'brush-size', 'draw-opacity'];
-  sceneControlIds.forEach((id) => { $(`#${id}`).disabled = !hasScene; });
+  sceneControlIds.forEach((id) => { $(`#${id}`).disabled = !hasScene || isExporting; });
+  $('#export-video').disabled = !hasScene || isExporting;
   if (!hasScene) {
     $('#board-label').textContent = 'YOUR FIRST IDEA';
     $('#scene-title').textContent = 'Start a storyboard';
@@ -402,6 +408,8 @@ function updateSceneInfo() {
   $('#stage-status').textContent = `Scene ${board.activeScene + 1} · ${scene.name}`;
   $('#scene-count').textContent = board.scenes.length;
   $('#scene-plural').textContent = board.scenes.length === 1 ? '' : 's';
+  const totalDuration = board.scenes.reduce((sum, item) => sum + item.duration, 0);
+  document.querySelector('.scene-meta').lastChild.textContent = ` · about ${Math.max(1, Math.round(totalDuration / 1000))} sec`;
   $('#stage-empty').classList.toggle('hidden', scene.figures.length > 0);
   $('#stage-empty p').innerHTML = 'Drop a character in<br />to start blocking.';
   $('#delete-scene').disabled = board.scenes.length === 1;
@@ -802,6 +810,224 @@ function showToast(message) {
   const toast = $('#toast'); toast.textContent = message; toast.classList.add('show'); clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
 }
+
+function figuresAtTime(scene, elapsed) {
+  const figures = scene.figures.map((figure) => ({ ...figure }));
+  if (!scene.frames.length) return figures;
+  const afterIndex = scene.frames.findIndex((frame) => frame.t >= elapsed);
+  const after = afterIndex === -1 ? scene.frames[scene.frames.length - 1] : scene.frames[afterIndex];
+  const before = scene.frames[Math.max(0, (afterIndex === -1 ? scene.frames.length - 1 : afterIndex) - 1)] || after;
+  const span = Math.max(1, after.t - before.t);
+  const progress = Math.max(0, Math.min(1, (elapsed - before.t) / span));
+  figures.forEach((figure) => {
+    const start = before.figures.find((item) => item.id === figure.id) || after.figures.find((item) => item.id === figure.id);
+    const end = after.figures.find((item) => item.id === figure.id) || start;
+    if (!start || !end) return;
+    ['x', 'y', 'vx', 'vy', 'tilt'].forEach((key) => {
+      figure[key] = start[key] + (end[key] - start[key]) * progress;
+    });
+  });
+  return figures;
+}
+
+function renderExportFrame(ctx, scene, elapsed) {
+  const sourceWidth = stage.clientWidth || 960;
+  const sourceHeight = stage.clientHeight || 540;
+  const scale = Math.min(EXPORT_WIDTH / sourceWidth, EXPORT_HEIGHT / sourceHeight);
+  const renderWidth = sourceWidth * scale;
+  const renderHeight = sourceHeight * scale;
+  const offsetX = (EXPORT_WIDTH - renderWidth) / 2;
+  const offsetY = (EXPORT_HEIGHT - renderHeight) / 2;
+
+  ctx.clearRect(0, 0, EXPORT_WIDTH, EXPORT_HEIGHT);
+  ctx.fillStyle = '#fbfaf5';
+  ctx.fillRect(0, 0, EXPORT_WIDTH, EXPORT_HEIGHT);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(offsetX, offsetY, renderWidth, renderHeight);
+  ctx.clip();
+  ctx.translate(offsetX, offsetY);
+  ctx.scale(scale, scale);
+  ctx.strokeStyle = 'rgba(223,218,205,.28)';
+  ctx.lineWidth = 1 / scale;
+  for (let x = 0; x <= sourceWidth; x += 24) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, sourceHeight); ctx.stroke();
+  }
+  for (let y = 0; y <= sourceHeight; y += 24) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(sourceWidth, y); ctx.stroke();
+  }
+  scene.drawings.forEach((drawing) => drawDrawing(ctx, drawing));
+  figuresAtTime(scene, elapsed).forEach((figure) => drawFigure(ctx, figure, elapsed, false, true));
+  ctx.restore();
+}
+
+function setExportProgress(progress) {
+  const percent = Math.max(0, Math.min(100, Math.round(progress * 100)));
+  $('#export-label').textContent = percent ? `Rendering ${percent}%` : 'Preparing…';
+}
+
+function safeVideoFilename(name) {
+  const safeName = name.trim().replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'storyboard';
+  return `${safeName}.mp4`;
+}
+
+function downloadVideo(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = safeVideoFilename(name);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function nextPaint() {
+  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
+async function findAvcConfig() {
+  const base = {
+    width: EXPORT_WIDTH,
+    height: EXPORT_HEIGHT,
+    bitrate: 3500000,
+    framerate: EXPORT_FPS,
+    latencyMode: 'quality'
+  };
+  for (const codec of ['avc1.42001f', 'avc1.4d001f']) {
+    const config = { ...base, codec };
+    try {
+      const support = await VideoEncoder.isConfigSupported(config);
+      if (support.supported) return support.config;
+    } catch (error) {
+      // Try the next broadly compatible H.264 profile.
+    }
+  }
+  return null;
+}
+
+async function renderWithWebCodecs(canvas, ctx, board) {
+  if (!window.VideoEncoder || !window.VideoFrame || !window.Mp4Muxer) return null;
+  const encoderConfig = await findAvcConfig();
+  if (!encoderConfig) return null;
+
+  const target = new Mp4Muxer.ArrayBufferTarget();
+  const muxer = new Mp4Muxer.Muxer({
+    target,
+    video: { codec: 'avc', width: EXPORT_WIDTH, height: EXPORT_HEIGHT, frameRate: EXPORT_FPS },
+    fastStart: 'in-memory'
+  });
+  let encoderError = null;
+  const encoder = new VideoEncoder({
+    output: (chunk, metadata) => muxer.addVideoChunk(chunk, metadata),
+    error: (error) => { encoderError = error; }
+  });
+  encoder.configure(encoderConfig);
+
+  const sceneFrameCounts = board.scenes.map((scene) => Math.max(1, Math.ceil(scene.duration / 1000 * EXPORT_FPS)));
+  const totalFrames = sceneFrameCounts.reduce((sum, count) => sum + count, 0);
+  const frameDuration = Math.round(1000000 / EXPORT_FPS);
+  let encodedFrames = 0;
+
+  for (let sceneIndex = 0; sceneIndex < board.scenes.length; sceneIndex++) {
+    const scene = board.scenes[sceneIndex];
+    const sceneFrames = sceneFrameCounts[sceneIndex];
+    for (let frameIndex = 0; frameIndex < sceneFrames; frameIndex++) {
+      const elapsed = Math.min(scene.duration - 1, frameIndex / EXPORT_FPS * 1000);
+      renderExportFrame(ctx, scene, Math.max(0, elapsed));
+      const videoFrame = new VideoFrame(canvas, {
+        timestamp: encodedFrames * frameDuration,
+        duration: frameDuration
+      });
+      encoder.encode(videoFrame, { keyFrame: encodedFrames % (EXPORT_FPS * 4) === 0 });
+      videoFrame.close();
+      encodedFrames++;
+      if (encoder.encodeQueueSize > 12) await new Promise((resolve) => setTimeout(resolve, 0));
+      if (encodedFrames % 8 === 0 || encodedFrames === totalFrames) {
+        setExportProgress(encodedFrames / totalFrames);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      if (encoderError) throw encoderError;
+    }
+  }
+
+  await encoder.flush();
+  encoder.close();
+  if (encoderError) throw encoderError;
+  muxer.finalize();
+  return new Blob([target.buffer], { type: 'video/mp4' });
+}
+
+async function renderWithMediaRecorder(canvas, ctx, board) {
+  if (!canvas.captureStream || !window.MediaRecorder) return null;
+  const mimeType = ['video/mp4;codecs=avc1.42E01E', 'video/mp4']
+    .find((type) => MediaRecorder.isTypeSupported(type));
+  if (!mimeType) return null;
+
+  const stream = canvas.captureStream(EXPORT_FPS);
+  const chunks = [];
+  const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 3500000 });
+  recorder.addEventListener('dataavailable', (event) => { if (event.data.size) chunks.push(event.data); });
+  const stopped = new Promise((resolve, reject) => {
+    recorder.addEventListener('stop', resolve, { once: true });
+    recorder.addEventListener('error', () => reject(recorder.error || new Error('Video recording failed.')), { once: true });
+  });
+  const totalDuration = board.scenes.reduce((sum, scene) => sum + scene.duration, 0);
+  let renderedDuration = 0;
+  recorder.start(1000);
+  for (const scene of board.scenes) {
+    const sceneFrames = Math.max(1, Math.ceil(scene.duration / 1000 * EXPORT_FPS));
+    for (let frameIndex = 0; frameIndex < sceneFrames; frameIndex++) {
+      const elapsed = Math.min(scene.duration - 1, frameIndex / EXPORT_FPS * 1000);
+      renderExportFrame(ctx, scene, Math.max(0, elapsed));
+      renderedDuration += 1000 / EXPORT_FPS;
+      setExportProgress(renderedDuration / totalDuration);
+      await new Promise((resolve) => setTimeout(resolve, 1000 / EXPORT_FPS));
+    }
+  }
+  recorder.stop();
+  await stopped;
+  stream.getTracks().forEach((track) => track.stop());
+  return new Blob(chunks, { type: mimeType });
+}
+
+async function exportVideo() {
+  const board = currentBoard();
+  if (!board || !board.scenes.length || isExporting) return;
+  if (isRecording) toggleRecording();
+  if (isPlaying) stopPlayback();
+
+  isExporting = true;
+  $('#export-video').disabled = true;
+  $('#export-video').classList.add('exporting');
+  $('#export-video').setAttribute('aria-busy', 'true');
+  setExportProgress(0);
+  updateSceneInfo();
+  await nextPaint();
+
+  const canvas = document.createElement('canvas');
+  canvas.width = EXPORT_WIDTH;
+  canvas.height = EXPORT_HEIGHT;
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  try {
+    let video = await renderWithWebCodecs(canvas, ctx, board);
+    if (!video) video = await renderWithMediaRecorder(canvas, ctx, board);
+    if (!video || !video.size) throw new Error('This browser cannot create MP4 video files.');
+    downloadVideo(video, board.name);
+    showToast('Video exported — ready to share anywhere.');
+  } catch (error) {
+    console.error(error);
+    showToast(error.message || 'Video export could not be finished.');
+  } finally {
+    isExporting = false;
+    $('#export-video').classList.remove('exporting');
+    $('#export-video').removeAttribute('aria-busy');
+    $('#export-label').textContent = 'Export video';
+    updateSceneInfo();
+  }
+}
+
 function newBoard() {
   const newName = `Storyboard ${boards.length + 1}`;
   boards.push({ id: `board-${Date.now()}`, name: newName, scenes: [createScene('First scene')], activeScene: 0 });
@@ -829,6 +1055,7 @@ $('#delete-scene').addEventListener('click', deleteScene);
 $('#new-board').addEventListener('click', newBoard);
 $('#new-board-bottom').addEventListener('click', newBoard);
 $('#share-button').addEventListener('click', () => showToast('Share link copied — invite the club!'));
+$('#export-video').addEventListener('click', exportVideo);
 paintCanvas.addEventListener('pointerdown', paintStart); paintCanvas.addEventListener('pointermove', paintMove); paintCanvas.addEventListener('pointerup', paintEnd); paintCanvas.addEventListener('pointerleave', paintEnd);
 figureCanvas.addEventListener('pointerdown', figureStart); figureCanvas.addEventListener('pointermove', figureMove); figureCanvas.addEventListener('pointerup', figureEnd); figureCanvas.addEventListener('pointercancel', figureEnd);
 window.addEventListener('keydown', (event) => {

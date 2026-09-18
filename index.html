@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stickfigure Storyboarder</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="Stickfigure Storyboarder home">
+          <span class="brand-mark"><i></i><i></i><i></i></span>
+          <span>Stickfigure<br /><b>Storyboarder</b></span>
+        </a>
+        <div class="top-actions">
+          <span class="saved-state"><span></span> Saved</span>
+          <button class="header-button" id="share-button">Share</button>
+          <button class="export-button" id="export-video" type="button" disabled>
+            <span class="export-icon" aria-hidden="true">↓</span>
+            <span id="export-label">Export video</span>
+          </button>
+          <button class="avatar" aria-label="Maya profile">M</button>
+        </div>
+      </header>
+
+      <aside class="storyboard-sidebar">
+        <div class="sidebar-heading">
+          <div>
+            <p class="eyebrow">YOUR BOARDS</p>
+            <h2>Storyboards</h2>
+          </div>
+          <button class="round-add" id="new-board" aria-label="Add new storyboard">+</button>
+        </div>
+        <nav id="board-list" class="board-list" aria-label="Storyboards"></nav>
+        <button class="new-board-button" id="new-board-bottom"><span>+</span> New storyboard</button>
+        <div class="sidebar-note">
+          <span class="scribble">✦</span>
+          <p>Rough ideas are<br />welcome here.</p>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <div class="workspace-header">
+          <div>
+            <p class="eyebrow" id="board-label">YOUR FIRST IDEA</p>
+            <h1 id="scene-title">Start a storyboard</h1>
+          </div>
+          <div class="scene-meta"><span id="scene-count">0</span> scene<span id="scene-plural">s</span> · about 10 sec</div>
+        </div>
+
+        <section class="stage-card" aria-label="Storyboard canvas">
+          <div class="stage-topline">
+            <div class="stage-name"><span class="record-dot"></span> <span id="stage-status">No storyboard yet</span></div>
+            <span class="draft-badge">ROUGH CUT</span>
+          </div>
+          <div id="stage" class="stage">
+            <canvas id="paint-canvas" aria-label="Background drawing canvas"></canvas>
+            <canvas id="figure-canvas" aria-label="Puppeteer canvas"></canvas>
+            <div id="stage-empty" class="stage-empty">
+              <span>+</span>
+              <p>Create a storyboard<br />to begin blocking.</p>
+            </div>
+            <div class="stage-hint" id="stage-hint">Try dragging a character around</div>
+          </div>
+          <div class="stage-footer">
+            <span><i class="play-mini">▶</i> <b id="duration-label">00:00</b> / 00:10</span>
+            <span>Characters move with a little wobble ✷</span>
+          </div>
+        </section>
+
+        <section class="tool-strip" aria-label="Animation tools">
+          <div class="tool-group people-tools">
+            <span class="tool-label">CAST</span>
+            <button class="tool-button add-figure" id="add-figure"><span class="person-icon">♙</span> Add stickfigure</button>
+            <button class="tool-button ghost" id="duplicate-figure" title="Duplicate last character">Duplicate</button>
+            <button class="tool-button delete-figures" id="delete-selected" title="Delete selected stickfigures or drawings">⌫ Delete selected</button>
+          </div>
+          <div class="tool-divider"></div>
+          <div class="tool-group">
+            <span class="tool-label">PUPPETEER</span>
+            <button class="record-button" id="record-button"><span class="record-ring"></span><span id="record-label">Record movement</span></button>
+            <button class="play-button" id="play-button"><span id="play-icon">▶</span> <span id="play-label">Play scene</span></button>
+          </div>
+          <div class="tool-divider"></div>
+          <div class="tool-group draw-tools">
+            <span class="tool-label">DRAW + STYLE</span>
+            <button class="icon-tool active" id="select-tool" aria-label="Select and move figures" title="Move figures">↖</button>
+            <button class="icon-tool" id="pencil-tool" aria-label="Pencil" title="Draw a background">✎</button>
+            <button class="icon-tool" id="eraser-tool" aria-label="Eraser" title="Erase drawing">⌫</button>
+            <label class="color-swatch" title="Selected item color"><input id="color-picker" type="color" value="#5b89df" aria-label="Selected item color" /></label>
+            <label class="range-wrap" title="Selected item line weight"><input id="brush-size" type="range" min="2" max="28" value="7" aria-label="Selected item line weight" /></label>
+            <label class="range-wrap opacity-wrap" title="Selected item opacity"><span>◐</span><input id="draw-opacity" type="range" min="0.1" max="1" step="0.05" value="0.82" aria-label="Selected item opacity" /></label>
+          </div>
+        </section>
+
+        <section class="timeline-section">
+          <div class="timeline-heading">
+            <div><p class="eyebrow">SEQUENCE</p><h2>Scene timeline</h2></div>
+            <div class="timeline-actions">
+              <span class="drag-tip">⋮⋮ Drag to rearrange</span>
+              <button class="small-button" id="delete-scene">Delete</button>
+              <button class="add-scene" id="add-scene">+ Add scene</button>
+            </div>
+          </div>
+          <div class="timeline-wrap">
+            <div id="timeline" class="timeline" aria-label="Scene timeline"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <template id="scene-card-template">
+      <article class="scene-card" draggable="true">
+        <div class="scene-thumb"><canvas></canvas><span class="thumb-number"></span><span class="thumb-play">▶</span></div>
+        <div class="scene-card-info"><span class="scene-card-name"></span><small>00:10</small></div>
+      </article>
+    </template>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.1/build/mp4-muxer.js"></script>
+    <script src="script.js"></script>
+  </body>
+</html>
